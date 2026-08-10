@@ -17,8 +17,11 @@ header{margin-bottom:14px}
 h1{font-family:Georgia,"Times New Roman",serif;font-weight:600;font-size:26px;letter-spacing:.2px;display:inline-block;
   border-bottom:3px solid var(--akzent);padding-bottom:3px}
 .sub{color:var(--meta);font-size:13px;margin-top:6px}
-.kats{display:flex;gap:8px;margin:14px 0 10px;flex-wrap:wrap}
-.kat{border:1.5px solid var(--linie);background:#fff;color:var(--tinte);border-radius:999px;padding:8px 14px;font-size:14px;min-height:40px}
+.kats{display:flex;gap:6px;margin:14px 0 10px;flex-wrap:nowrap}
+.kat{flex:1 1 0;min-width:0;border:1.5px solid var(--linie);background:#fff;color:var(--tinte);
+  border-radius:999px;padding:8px 4px;font-size:13px;min-height:40px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+@media (max-width:340px){.kat{font-size:12px;padding:8px 2px}}
 .kat.aktiv{color:#fff;border-color:transparent;font-weight:600}
 .privat{font-size:13px;color:var(--amber);background:#FFF6E8;border:1px solid #F0DFC2;border-radius:8px;
   padding:8px 10px;margin:0 0 12px}
