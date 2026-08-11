@@ -28,7 +28,7 @@ h1{font-family:Georgia,"Times New Roman",serif;font-weight:600;font-size:26px;le
 .karte{background:var(--karte);border:1px solid var(--linie);border-radius:12px;padding:14px;margin-bottom:14px;
   box-shadow:0 1px 2px rgba(30,25,20,.04)}
 label{display:block;font-size:13px;color:var(--meta);margin-bottom:5px}
-input[type=text]{width:100%;border:1px solid var(--linie);border-radius:8px;padding:10px 12px;font:inherit;background:#fff}
+input[type=text],input[type=password],input[type=file],select{width:100%;border:1px solid var(--linie);border-radius:8px;padding:10px 12px;font:inherit;background:#fff;margin-top:4px}
 textarea{width:100%;border:1px solid var(--linie);border-radius:8px;padding:12px;font:inherit;background:#fff;
   min-height:150px;resize:vertical;line-height:1.5}
 input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--akzent);outline-offset:1px}
@@ -93,7 +93,7 @@ button{font:inherit;border:none;border-radius:9px;padding:12px 16px;cursor:point
     <button type="button" class="primaer" id="sichernKi" style="flex:1.4 1 55%">Sichern &amp; überarbeiten</button>
     <button type="button" class="leise" id="sichern" style="flex:1 1 35%">Nur sichern</button>
   </div>
-  <div class="speicher" style="text-align:left;margin-top:8px">Für die KI-Überarbeitung wird nur der Diktattext an Claude übertragen – die App muss dafür in Claude geöffnet sein.</div>
+  <div class="speicher" style="text-align:left;margin-top:8px" id="kiHinweis"></div>
 </div>
 
 <div class="stapel-kopf">
@@ -120,6 +120,11 @@ button{font:inherit;border:none;border-radius:9px;padding:12px 16px;cursor:point
         <button type="button" class="leise" id="apiLoeschen">Entfernen</button>
       </div>
       <div class="hinweis" id="apiStand" style="margin-top:6px"></div>
+      <label for="modellFeld" class="hinweis" style="margin-top:10px;display:block">Modell für die Überarbeitung (nur mit eigenem Schlüssel)</label>
+      <select id="modellFeld">
+        <option value="claude-sonnet-5">Sonnet 5 – schnell, günstig</option>
+        <option value="claude-opus-5">Opus 5 – gründlicher, teurer</option>
+      </select>
     </div>
   </div>
 </div>
@@ -249,19 +254,33 @@ function dateiName(){
 /* ---- KI-Überarbeitung (läuft über das Claude-Konto, wenn die App in Claude geöffnet ist) ---- */
 var SIGNATUR='Dr. Jörg Ungemach';
 function schluessel(){ try{return localStorage.getItem('apischluessel')||'';}catch(e){return '';} }
+function modell(){ try{return localStorage.getItem('modell')||'claude-sonnet-5';}catch(e){return 'claude-sonnet-5';} }
+function kiHinweis(){
+  var el=$('kiHinweis'); if(!el) return;
+  el.textContent=schluessel()
+    ?'Für die Überarbeitung wird nur der Diktattext übertragen – über deinen eigenen Zugang.'
+    :'Für die Überarbeitung wird nur der Diktattext an Claude übertragen – ohne eigenen Schlüssel nur, wenn die App in Claude geöffnet ist.';
+}
 function schluesselStand(){
+  kiHinweis();
   var k=schluessel();
   $('apiStand').textContent=k?('Hinterlegt: …'+k.slice(-6)+' – die KI läuft über dein eigenes Konto.')
                              :'Kein Schlüssel hinterlegt. In Claude läuft die KI über dein Claude-Konto, außerhalb nicht.';
 }
 var PROMPTS={
-  arzt:'Du erhältst ein Diktat aus einer gastroenterologischen Praxis (Befund, Beurteilung oder Notiz für einen Arztbrief). Überarbeite es ausschließlich sprachlich: korrigiere Diktier-, Rechtschreib-, Grammatik- und Interpunktionsfehler, setze gesprochene Diktierkommandos (z. B. \u201ePunkt\u201c, \u201eKomma\u201c, \u201eneue Zeile\u201c, \u201eAbsatz\u201c) um und schreibe medizinische Fachbegriffe korrekt aus. Ändere keine inhaltlichen Aussagen, Zahlen, Dosierungen oder Medikamentennamen; ergänze nichts und lasse nichts weg. Keine Anrede, keine Grußformel.',
+  arzt:'Du erhältst ein Diktat aus einer gastroenterologischen Praxis (Befund, Beurteilung oder Notiz für einen Arztbrief). Überarbeite es ausschließlich sprachlich: korrigiere Diktier-, Rechtschreib-, Grammatik- und Interpunktionsfehler, setze gesprochene Diktierkommandos (z. B. \u201ePunkt\u201c, \u201eKomma\u201c, \u201eneue Zeile\u201c, \u201eAbsatz\u201c) um und schreibe medizinische Fachbegriffe korrekt aus. Ändere keine inhaltlichen Aussagen; Zahlen, Maße, Befundwerte, Dosierungen und Medikamentennamen bleiben unangetastet und werden nicht umgerechnet. Ergänze nichts und lasse nichts weg. Keine Anrede, keine Grußformel.',
   wa:'Formuliere aus dem folgenden Diktat eine versandfertige WhatsApp-Nachricht auf Deutsch: knapp, freundlich, natürlicher Ton; behalte die Anredeform (Du/Sie) des Diktats bei; setze Diktierkommandos um und korrigiere Diktier- und Rechtschreibfehler; schreibe Kosenamen und umgangssprachliche Wörter in ihrer üblichen Form (z. B. \u201eSchatzi\u201c, nicht \u201eSchatzzie\u201c). Keine Betreffzeile, keine Signatur.',
   mail:'Formuliere aus dem folgenden Diktat eine versandfertige E-Mail auf Deutsch: passende Anrede, freundlicher professioneller Ton, sinnvolle Absätze, abschließende Grußformel mit \u201e'+SIGNATUR+'\u201c. Setze Diktierkommandos um und korrigiere Diktier- und Rechtschreibfehler. Gib nur den E-Mail-Text ohne Betreffzeile aus.',
   brief:'Formuliere aus dem folgenden Diktat einen versandfertigen formellen Brieftext auf Deutsch (Stil eines ärztlichen Geschäftsbriefs, z. B. Stellungnahme an eine Krankenkasse, ein Gericht oder Kollegen): passende Anrede, sachlich-präziser, höflicher Ton, klar gegliederte Absätze, Grußformel \u201eMit freundlichen Grüßen\u201c und \u201e'+SIGNATUR+'\u201c. Setze Diktierkommandos um und korrigiere Diktier- und Rechtschreibfehler. Gib nur den Brieftext ohne Adresskopf und ohne Betreff aus.'
 };
+var REGELN='Das Diktat stammt aus einer Spracherkennung und enthält deren typische Fehler: falsch erkannte oder verschluckte Wörter, verdrehte Wortfolgen, fehlende Satzzeichen, abgebrochene Sätze und unklar geschriebene Zahlen und Uhrzeiten. '
++'Erwartet wird eine echte Überarbeitung, keine Abschrift mit Kosmetik: Erschließe aus dem Zusammenhang, was gemeint war, und schreibe es in klarem, korrektem Deutsch. '
++'Uhrzeiten und Zahlen in eine eindeutige Form bringen, wenn der Zusammenhang sie hergibt (aus \u201eum 1\u201c wird \u201eum 13 Uhr\u201c, aus \u201ebis 1\u201c wird \u201ebis 13 Uhr\u201c). '
++'Bleibt eine Stelle auch im Zusammenhang unklar, formuliere die naheliegendste Lesart, statt die fehlerhafte Wortfolge zu übernehmen. '
++'Inhaltlich streng am Diktat bleiben: nichts hinzuerfinden, keine Angaben weglassen, keine Rückfragen stellen. '
++'Verlangt das Diktat ausdrücklich eine wörtliche Übernahme, halte dich daran.';
 function bauePrompt(k,text){
-  return (PROMPTS[k]||PROMPTS.arzt)
+  return (PROMPTS[k]||PROMPTS.arzt)+'\n\n'+REGELN
     +'\n\nGib ausschließlich den fertigen Text aus – ohne Einleitung, ohne Kommentar, ohne Markdown.'
     +'\n\nDiktat:\n<<<\n'+text+'\n>>>';
 }
@@ -273,7 +292,7 @@ function ueberarbeiten(d){
   d._busy=1; render();
   return fetch('https://api.anthropic.com/v1/messages',{
     method:'POST', headers:kopf,
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1000,
+    body:JSON.stringify({model:k?modell():'claude-sonnet-4-6',max_tokens:2000,
       messages:[{role:'user',content:bauePrompt(d.c,d.x)}]})
   }).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
   .then(function(data){
@@ -782,7 +801,10 @@ function render(){
 /* ---- Ereignisse ---- */
 $('schluesselAuf').addEventListener('click',function(){
   var f=$('schluesselFeld'); f.style.display=(f.style.display==='none'?'':'none');
-  if(f.style.display===''){ $('apiFeld').value=schluessel(); schluesselStand(); }
+  if(f.style.display===''){ $('apiFeld').value=schluessel(); $('modellFeld').value=modell(); schluesselStand(); }
+});
+$('modellFeld').addEventListener('change',function(){
+  try{ localStorage.setItem('modell',$('modellFeld').value); toast('Modell gespeichert'); }catch(e){}
 });
 $('apiSichern').addEventListener('click',function(){
   var v=$('apiFeld').value.trim();
