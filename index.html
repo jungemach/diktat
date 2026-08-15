@@ -89,7 +89,11 @@ button{font:inherit;border:none;border-radius:9px;padding:12px 16px;cursor:point
   <input type="text" id="kuerzel" placeholder="z. B. MM 1964" autocomplete="off">
   <label for="text" style="margin-top:12px">Diktat <span style="color:var(--meta)">– Mikrofon der Tastatur nutzen</span></label>
   <textarea id="text" placeholder="Hier tippen oder diktieren …"></textarea>
+  <label for="anhangDatei" style="margin-top:12px">Schreiben beantworten <span style="color:var(--meta)">– Foto oder Scan anhängen (optional)</span></label>
+  <input type="file" id="anhangDatei" accept="image/*,application/pdf">
+  <div class="hinweis" id="anhangStand" style="margin-top:6px;display:none"></div>
   <div class="reihe" style="flex-wrap:wrap">
+    <button type="button" class="primaer" id="antwortKi" style="flex:1 1 100%;display:none">Antwort auf das Schreiben entwerfen</button>
     <button type="button" class="primaer" id="sichernKi" style="flex:1.4 1 55%">Sichern &amp; überarbeiten</button>
     <button type="button" class="leise" id="sichern" style="flex:1 1 35%">Nur sichern</button>
   </div>
@@ -279,34 +283,59 @@ var REGELN='Das Diktat stammt aus einer Spracherkennung und enthält deren typis
 +'Bleibt eine Stelle auch im Zusammenhang unklar, formuliere die naheliegendste Lesart, statt die fehlerhafte Wortfolge zu übernehmen. '
 +'Inhaltlich streng am Diktat bleiben: nichts hinzuerfinden, keine Angaben weglassen, keine Rückfragen stellen. '
 +'Verlangt das Diktat ausdrücklich eine wörtliche Übernahme, halte dich daran.';
+function bauePromptAntwort(k,anweisung){
+  var ziel={
+    arzt:'Formuliere daraus einen Text im Stil einer ärztlichen Stellungnahme bzw. eines Arztbrief-Abschnitts.',
+    wa:  'Formuliere daraus eine kurze, freundliche WhatsApp-Nachricht.',
+    mail:'Formuliere daraus eine versandfertige E-Mail mit Anrede und Grußformel mit \u201e'+SIGNATUR+'\u201c, ohne Betreffzeile.',
+    brief:'Formuliere daraus einen versandfertigen formellen Brieftext mit Anrede, Grußformel \u201eMit freundlichen Grüßen\u201c und \u201e'+SIGNATUR+'\u201c, ohne Adresskopf und ohne Betreff.'
+  }[k]||'Formuliere daraus einen sachlichen Antworttext.';
+  return 'Im Anhang befindet sich ein fotografiertes oder eingescanntes Schreiben, das an mich gerichtet ist. '
+    +'Lies es und entwirf meine Antwort darauf. '+ziel+' '
+    +'Nimm Bezug auf die Punkte des Schreibens: Aktenzeichen, Datum und Fristen aufgreifen, wenn sie darin stehen. '
+    +'Antworte auf Deutsch, sachlich und höflich.\n\n'
+    +'Wichtig: Erfinde keine Angaben. Wo für die Antwort eine Angabe fehlt, die nur ich kennen kann, setze eine eckige Klammer als Platzhalter, z. B. [Datum ergänzen]. '
+    +'Wenn das Schreiben unleserlich ist oder kein Schreiben zeigt, sage das in einem Satz statt zu raten.\n\n'
+    +(anweisung?('So soll die Antwort ausfallen (meine Vorgabe):\n<<<\n'+anweisung+'\n>>>\n\n'):'')
+    +'Gib ausschließlich den fertigen Antworttext aus – ohne Einleitung, ohne Kommentar, ohne Markdown.';
+}
 function bauePrompt(k,text){
   return (PROMPTS[k]||PROMPTS.arzt)+'\n\n'+REGELN
     +'\n\nGib ausschließlich den fertigen Text aus – ohne Einleitung, ohne Kommentar, ohne Markdown.'
     +'\n\nDiktat:\n<<<\n'+text+'\n>>>';
 }
-function ueberarbeiten(d){
-  if(!d||d._busy||d.alt) return Promise.resolve();
+function kiFehler(err,k){
+  var m=String(err&&err.message||'');
+  if(k&&m.indexOf('401')>=0) return 'Schlüssel abgelehnt – bitte in den Einstellungen prüfen';
+  if(k&&m.indexOf('413')>=0) return 'Anhang zu groß – bitte enger fotografieren';
+  if(k&&m.indexOf('400')>=0) return 'Anfrage abgelehnt – Guthaben oder Limit prüfen';
+  if(k&&m.indexOf('429')>=0) return 'Zu viele Anfragen – kurz warten';
+  if(k) return 'Nicht möglich – Verbindung oder Guthaben prüfen';
+  return 'Nicht möglich – ist die App in Claude geöffnet?';
+}
+function kiAnfrage(inhalt){
   var k=schluessel();
   var kopf={'Content-Type':'application/json'};
   if(k){ kopf['x-api-key']=k; kopf['anthropic-version']='2023-06-01'; kopf['anthropic-dangerous-direct-browser-access']='true'; }
-  d._busy=1; render();
   return fetch('https://api.anthropic.com/v1/messages',{
     method:'POST', headers:kopf,
     body:JSON.stringify({model:k?modell():'claude-sonnet-4-6',max_tokens:2000,
-      messages:[{role:'user',content:bauePrompt(d.c,d.x)}]})
+      messages:[{role:'user',content:inhalt}]})
   }).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
   .then(function(data){
     var out=((data&&data.content)||[]).map(function(b){return b&&b.type==='text'?b.text:'';}).filter(Boolean).join('\n').trim();
     if(!out) throw new Error('leer');
+    return out;
+  });
+}
+function ueberarbeiten(d){
+  if(!d||d._busy||d.alt) return Promise.resolve();
+  d._busy=1; render();
+  return kiAnfrage(bauePrompt(d.c,d.x)).then(function(out){
     delete d._busy; d.alt=d.x; d.x=out; d.aktivKi=true;
     speichern(); render(); toast('Überarbeitet – Original bleibt erhalten');
   }).catch(function(err){
-    delete d._busy; render();
-    var m=String(err&&err.message||'');
-    if(k&&m.indexOf('401')>=0) toast('Schlüssel abgelehnt – bitte in den Einstellungen prüfen');
-    else if(k&&m.indexOf('400')>=0) toast('Anfrage abgelehnt – Guthaben oder Limit prüfen');
-    else if(k) toast('Überarbeitung nicht möglich – Verbindung oder Guthaben prüfen');
-    else toast('Überarbeitung nicht möglich – ist die App in Claude geöffnet?');
+    delete d._busy; render(); toast(kiFehler(err,schluessel()));
   });
 }
 function wechseln(d){
@@ -321,6 +350,72 @@ function setCat(k){
   $('kuerzel').placeholder=KAT[k].ph;
   $('privat').style.display=(k==='arzt')?'block':'none';
   renderKats();
+}
+var ANHANG=null; /* {art:'bild'|'pdf', typ, b64, name} */
+function anhangAnzeigen(){
+  var st=$('anhangStand');
+  if(!ANHANG){ st.style.display='none'; $('antwortKi').style.display='none'; return; }
+  st.style.display='';
+  st.textContent='Angehängt: '+ANHANG.name+' – zum Entfernen erneut eine Datei wählen oder die Seite neu laden.';
+  $('antwortKi').style.display='';
+}
+function bildVerkleinern(datei){
+  return new Promise(function(fertig,daneben){
+    var url=URL.createObjectURL(datei), bild=new Image();
+    bild.onload=function(){
+      var max=1500, w=bild.width, h=bild.height;
+      var f=Math.min(1,max/Math.max(w,h));
+      var c=document.createElement('canvas');
+      c.width=Math.round(w*f); c.height=Math.round(h*f);
+      c.getContext('2d').drawImage(bild,0,0,c.width,c.height);
+      URL.revokeObjectURL(url);
+      var d=c.toDataURL('image/jpeg',0.8);
+      fertig({art:'bild',typ:'image/jpeg',b64:d.split(',')[1],name:datei.name||'Foto'});
+    };
+    bild.onerror=function(){URL.revokeObjectURL(url);daneben(new Error('Bild nicht lesbar'));};
+    bild.src=url;
+  });
+}
+function dateiAlsB64(datei){
+  return new Promise(function(fertig,daneben){
+    var leser=new FileReader();
+    leser.onload=function(){ fertig(String(leser.result).split(',')[1]); };
+    leser.onerror=function(){ daneben(new Error('Datei nicht lesbar')); };
+    leser.readAsDataURL(datei);
+  });
+}
+function anhangWahl(ev){
+  var f=ev.target.files&&ev.target.files[0];
+  ANHANG=null; anhangAnzeigen();
+  if(!f) return;
+  if(f.type==='application/pdf'){
+    if(f.size>4500000){ toast('PDF zu groß – bitte unter 4 MB'); ev.target.value=''; return; }
+    dateiAlsB64(f).then(function(b64){
+      ANHANG={art:'pdf',typ:'application/pdf',b64:b64,name:f.name||'Dokument.pdf'};
+      anhangAnzeigen(); toast('Dokument angehängt');
+    }).catch(function(){ toast('Datei konnte nicht gelesen werden'); });
+    return;
+  }
+  if(f.type.indexOf('image/')!==0){ toast('Bitte ein Foto oder eine PDF-Datei wählen'); ev.target.value=''; return; }
+  bildVerkleinern(f).then(function(a){ ANHANG=a; anhangAnzeigen(); toast('Foto angehängt'); })
+    .catch(function(){ toast('Foto konnte nicht gelesen werden'); });
+}
+function antwortEntwerfen(){
+  if(!ANHANG){ toast('Kein Dokument angehängt'); return; }
+  var anweisung=$('text').value.replace(/\r/g,'').trim();
+  var b=$('antwortKi'); b.disabled=true; b.textContent='Entwerfe …';
+  var quelle=(ANHANG.art==='pdf')
+    ? {type:'document',source:{type:'base64',media_type:'application/pdf',data:ANHANG.b64}}
+    : {type:'image',source:{type:'base64',media_type:ANHANG.typ,data:ANHANG.b64}};
+  kiAnfrage([quelle,{type:'text',text:bauePromptAntwort(cat,anweisung)}])
+  .then(function(out){
+    var d={t:fmtNow(),k:$('kuerzel').value.trim(),x:out,c:cat,aktivKi:true,quelle:ANHANG.name};
+    D.unshift(d);
+    $('text').value=''; $('kuerzel').value='';
+    ANHANG=null; $('anhangDatei').value=''; anhangAnzeigen();
+    speichern(); render(); toast('Antwortentwurf erstellt – bitte prüfen');
+  }).catch(function(err){ toast(kiFehler(err,schluessel())); })
+  .then(function(){ b.disabled=false; b.textContent='Antwort auf das Schreiben entwerfen'; });
 }
 function sichern(){
   var x=$('text').value.replace(/\r/g,'').trim();
@@ -785,6 +880,7 @@ function render(){
     akt+='<button type="button" class="leise klein" data-kopie="'+i+'">Kopieren</button>'
         +'<button type="button" class="leise klein rot" data-del="'+i+'">Löschen</button></div>';
     var kiBadge=d.alt?('<span class="badge" style="background:'+(d.aktivKi?'#211F1C':'#8A857D')+'">'+(d.aktivKi?'KI-Fassung':'Original')+'</span>'):'';
+    if(d.quelle) kiBadge+='<span class="badge" style="background:#6F6A63">Entwurf zum Schreiben</span>';
     el.innerHTML='<div class="meta"><span class="badge" style="background:'+KAT[d.c].f+'">'+KAT[d.c].n+'</span>'+kiBadge
       +'<span>'+esc(d.t)+'</span>'+(d.k?'<span class="kuerzel">'+esc(d.k)+'</span>':'')+'</div>'
       +'<div class="text" id="tx'+i+'">'+esc(d.x)+'</div>'
@@ -817,6 +913,8 @@ $('apiLoeschen').addEventListener('click',function(){
   try{ localStorage.removeItem('apischluessel'); }catch(e){}
   $('apiFeld').value=''; schluesselStand(); toast('Schlüssel entfernt');
 });
+$('anhangDatei').addEventListener('change',anhangWahl);
+$('antwortKi').addEventListener('click',antwortEntwerfen);
 $('sichern').addEventListener('click',sichern);
 $('sichernKi').addEventListener('click',function(){var d=sichern(); if(d) ueberarbeiten(d);});
 $('exportDatei').addEventListener('click',exportDatei);
