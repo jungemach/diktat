@@ -283,12 +283,26 @@ var PROMPTS={
   mail:'Formuliere aus dem folgenden Diktat eine versandfertige E-Mail auf Deutsch: passende Anrede, freundlicher professioneller Ton, sinnvolle Absätze, abschließende Grußformel mit \u201e'+SIGNATUR+'\u201c. Setze Diktierkommandos um und korrigiere Diktier- und Rechtschreibfehler. Gib nur den E-Mail-Text ohne Betreffzeile aus.',
   brief:'Formuliere aus dem folgenden Diktat einen versandfertigen formellen Brieftext auf Deutsch (Stil eines ärztlichen Geschäftsbriefs, z. B. Stellungnahme an eine Krankenkasse, ein Gericht oder Kollegen): passende Anrede, sachlich-präziser, höflicher Ton, klar gegliederte Absätze, Grußformel \u201eMit freundlichen Grüßen\u201c und \u201e'+SIGNATUR+'\u201c. Setze Diktierkommandos um und korrigiere Diktier- und Rechtschreibfehler. Gib nur den Brieftext ohne Adresskopf und ohne Betreff aus.'
 };
-var REGELN='Das Diktat stammt aus einer Spracherkennung und enthält deren typische Fehler: falsch erkannte oder verschluckte Wörter, verdrehte Wortfolgen, fehlende Satzzeichen, abgebrochene Sätze und unklar geschriebene Zahlen und Uhrzeiten. '
+var REGELN='Das Diktat stammt aus einer Spracherkennung und enthält deren typische Fehler: falsch erkannte oder verschluckte Wörter, verdrehte Wortfolgen, fehlende Satzzeichen und abgebrochene Sätze. '
 +'Erwartet wird eine echte Überarbeitung, keine Abschrift mit Kosmetik: Erschließe aus dem Zusammenhang, was gemeint war, und schreibe es in klarem, korrektem Deutsch. '
-+'Uhrzeiten und Zahlen in eine eindeutige Form bringen, wenn der Zusammenhang sie hergibt (aus \u201eum 1\u201c wird \u201eum 13 Uhr\u201c, aus \u201ebis 1\u201c wird \u201ebis 13 Uhr\u201c). '
 +'Bleibt eine Stelle auch im Zusammenhang unklar, formuliere die naheliegendste Lesart, statt die fehlerhafte Wortfolge zu übernehmen. '
++'Uhrzeiten dürfen aus dem Zusammenhang eindeutig gemacht werden (aus \u201eum 1\u201c wird \u201eum 13 Uhr\u201c, wenn der Zusammenhang das hergibt). '
++'Datumsangaben dagegen bleiben genau so, wie sie diktiert wurden: Ergänze niemals eine Jahreszahl, einen Monat oder einen Wochentag, die nicht gesprochen wurden, und rechne keine Angabe um. '
++'Wurde \u201eder 20.02.\u201c diktiert, bleibt es \u201eder 20.02.\u201c; \u201emorgen\u201c bleibt \u201emorgen\u201c. '
 +'Inhaltlich streng am Diktat bleiben: nichts hinzuerfinden, keine Angaben weglassen, keine Rückfragen stellen. '
 +'Verlangt das Diktat ausdrücklich eine wörtliche Übernahme, halte dich daran.';
+function heuteLang(){
+  var m=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+  var w=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+  var d=new Date();
+  return w[d.getDay()]+', '+d.getDate()+'. '+m[d.getMonth()]+' '+d.getFullYear();
+}
+function bauePrompt(k,text){
+  return (PROMPTS[k]||PROMPTS.arzt)+'\n\n'+REGELN
+    +'\n\nZur Einordnung: Heute ist '+heuteLang()+'. Diese Angabe dient nur dem Verständnis und wird nicht in den Text geschrieben.'
+    +'\n\nGib ausschließlich den fertigen Text aus – ohne Einleitung, ohne Kommentar, ohne Markdown.'
+    +'\n\nDiktat:\n<<<\n'+text+'\n>>>';
+}
 function bauePromptAntwort(k,anweisung){
   var ziel={
     arzt:'Formuliere daraus einen Text im Stil einer ärztlichen Stellungnahme bzw. eines Arztbrief-Abschnitts.',
@@ -299,7 +313,7 @@ function bauePromptAntwort(k,anweisung){
   return 'Im Anhang befindet sich ein fotografiertes oder eingescanntes Schreiben, das an mich gerichtet ist. '
     +'Lies es und entwirf meine Antwort darauf. '+ziel+' '
     +'Nimm Bezug auf die Punkte des Schreibens: Aktenzeichen, Datum und Fristen aufgreifen, wenn sie darin stehen. '
-    +'Antworte auf Deutsch, sachlich und höflich.\n\n'
+    +'Antworte auf Deutsch, sachlich und höflich. Heute ist '+heuteLang()+'.\n\n'+'Ergänze keine Datumsangaben, die weder im Schreiben noch in meiner Vorgabe stehen.\n\n'
     +'Wichtig: Erfinde keine Angaben. Wo für die Antwort eine Angabe fehlt, die nur ich kennen kann, setze eine eckige Klammer als Platzhalter, z. B. [Datum ergänzen]. '
     +'Wenn das Schreiben unleserlich ist oder kein Schreiben zeigt, sage das in einem Satz statt zu raten.\n\n'
     +(anweisung?('So soll die Antwort ausfallen (meine Vorgabe):\n<<<\n'+anweisung+'\n>>>\n\n'):'')
@@ -641,6 +655,9 @@ function absatzBauen(props,rprops,zeile){
 }
 function ersetzeInDokument(xml,werte){
   return xml.replace(/<w:p(?: [^>]*)?>[\s\S]*?<\/w:p>|<w:p(?: [^>]*)?\/>/g,function(p){
+    /* Textrahmen: ein aeusserer Absatz kann Absaetze enthalten. Solche Treffer
+       nicht umbauen, sonst geht der Rahmen samt Logo verloren. */
+    if(/<w:p[ >\/]/.test(p.slice(1))) return p;
     var txt=absatzText(p),treffer=txt.match(/\{\{\s*([A-Za-zÄÖÜäöü_]+)\s*\}\}/);
     if(!treffer) return p;
     var schluessel=treffer[1].toUpperCase();
