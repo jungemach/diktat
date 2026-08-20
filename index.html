@@ -137,6 +137,25 @@ button{font:inherit;border:none;border-radius:9px;padding:12px 16px;cursor:point
       </select>
     </div>
   </div>
+  <div id="gistBox" style="margin-top:8px">
+    <button type="button" class="leise klein" id="gistAuf" style="width:100%">Einstellungen: Briefkasten für Arztbriefe</button>
+    <div id="gistFeld" style="display:none;margin-top:8px">
+      <label for="gistToken" class="hinweis">GitHub-Token (classic, nur Haken bei „gist"). Bleibt auf diesem Gerät.</label>
+      <input id="gistToken" type="password" autocomplete="off" placeholder="ghp_…">
+      <div class="reihe" style="margin-top:6px">
+        <button type="button" class="primaer" id="gistTokenSichern" style="flex:1">Token speichern</button>
+        <button type="button" class="leise" id="gistTokenLoeschen">Entfernen</button>
+      </div>
+      <button type="button" class="leise klein" id="gistAnlegen" style="width:100%;margin-top:10px">Briefkasten anlegen</button>
+      <label for="gistIdFeld" class="hinweis" style="margin-top:10px;display:block">Briefkasten-Nummer – diese trägst du am Praxis-PC im Generator ein</label>
+      <input id="gistIdFeld" type="text" autocomplete="off" placeholder="noch keiner angelegt">
+      <div class="reihe" style="margin-top:6px">
+        <button type="button" class="leise klein" id="gistIdSichern" style="flex:1">Nummer speichern</button>
+        <button type="button" class="leise klein" id="gistIdKopie" style="flex:1">Nummer kopieren</button>
+      </div>
+      <div class="hinweis" id="gistStand" style="margin-top:8px"></div>
+    </div>
+  </div>
 </div>
 
 <div id="overlay">
@@ -245,6 +264,93 @@ function speichern(){
   var inhalt=JSON.stringify({v:2,lastCat:cat,diktate:D});
   if(speicherArt==='claude'){ try{window.storage.set('diktate',inhalt).catch(function(){});}catch(e){} return; }
   if(speicherArt==='geraet'){ try{localStorage.setItem('diktate',inhalt);}catch(e){} }
+}
+
+/* ---- Cloud-Briefkasten (privates GitHub-Gist) ---- */
+function gToken(){ try{return localStorage.getItem('gisttoken')||'';}catch(e){return '';} }
+function gistId(){ try{return localStorage.getItem('gistid')||'';}catch(e){return '';} }
+function gistBereit(){ return !!(gToken()&&gistId()); }
+function gistKopf(){
+  return {'Authorization':'Bearer '+gToken(),
+          'Accept':'application/vnd.github+json',
+          'Content-Type':'application/json'};
+}
+function gistFehler(err){
+  var m=String(err&&err.message||'');
+  if(m.indexOf('401')>=0) return 'Token abgelehnt – bitte prüfen';
+  if(m.indexOf('403')>=0) return 'Token ohne Gist-Berechtigung';
+  if(m.indexOf('404')>=0) return 'Briefkasten nicht gefunden – Nummer prüfen';
+  if(m.indexOf('gekürzt')>=0) return m;
+  if(m.indexOf('422')>=0) return 'Briefkasten nahm die Daten nicht an';
+  return 'Briefkasten nicht erreichbar';
+}
+function gistStandZeigen(text){
+  var el=$('gistStand'); if(!el) return;
+  if(text){ el.textContent=text; return; }
+  var offen=offeneArzt().length;
+  if(!gToken()){ el.textContent='Kein Token hinterlegt – Arztbrief-Diktate bleiben nur auf dem Handy.'; return; }
+  if(!gistId()){ el.textContent='Token da, aber noch kein Briefkasten. Auf „Briefkasten anlegen" tippen.'; return; }
+  el.textContent='Briefkasten aktiv.'+(offen?' '+offen+' Arztbrief-Diktat(e) noch nicht übertragen.':' Alles übertragen.');
+}
+function offeneArzt(){
+  return D.filter(function(d){ return d.c==='arzt' && !d.g && d.x; });
+}
+function briefkastenAnlegen(){
+  if(!gToken()){ toast('Erst das Token speichern'); return Promise.resolve(false); }
+  var b=$('gistAnlegen'); b.disabled=true; b.textContent='Lege an …';
+  var leer=JSON.stringify({v:2,app:'cgb-diktat',diktate:[]},null,1);
+  return fetch('https://api.github.com/gists',{
+    method:'POST', headers:gistKopf(),
+    body:JSON.stringify({description:'Diktat – Briefkasten für den Arztbrief-Generator',
+                         'public':false,
+                         files:{'diktate.json':{content:leer}}})
+  }).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+  .then(function(g){
+    try{ localStorage.setItem('gistid',g.id); }catch(e){}
+    $('gistIdFeld').value=g.id;
+    gistStandZeigen('Briefkasten angelegt. Nummer unten – am Praxis-PC eintragen.');
+    toast('Briefkasten angelegt');
+    render();
+  }).catch(function(err){ gistStandZeigen(gistFehler(err)); toast(gistFehler(err)); })
+  .then(function(){ b.disabled=false; b.textContent='Briefkasten anlegen'; });
+}
+/* Push darf niemals das lokale Sichern verhindern - deshalb faengt diese
+   Funktion jeden Fehler ab und meldet ihn nur. */
+function pushArzt(sagWennNichts){
+  var offen=offeneArzt();
+  if(!gistBereit()){ if(sagWennNichts) toast('Kein Briefkasten eingerichtet'); return Promise.resolve(false); }
+  if(!offen.length){ if(sagWennNichts) toast('Nichts zu übertragen'); return Promise.resolve(false); }
+  offen.forEach(function(d){ d._push=1; }); render();
+  var fertig=function(){ offen.forEach(function(d){ delete d._push; }); };
+  return fetch('https://api.github.com/gists/'+gistId(),{headers:gistKopf()})
+  .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+  .then(function(g){
+    var datei=g.files&&g.files['diktate.json'];
+    if(datei&&datei.truncated) throw new Error('Briefkasten voll (gekürzt), am PC leeren');
+    var vorhanden=[];
+    if(datei&&datei.content){
+      try{ var o=JSON.parse(datei.content); if(o&&Array.isArray(o.diktate)) vorhanden=o.diktate; }catch(e){}
+    }
+    var neu=offen.map(function(d){ return {t:d.t,k:d.k,x:d.x,c:d.c}; });
+    var inhalt=JSON.stringify({v:2,app:'cgb-diktat',diktate:vorhanden.concat(neu)},null,1);
+    return fetch('https://api.github.com/gists/'+gistId(),{
+      method:'PATCH', headers:gistKopf(),
+      body:JSON.stringify({files:{'diktate.json':{content:inhalt}}})
+    });
+  })
+  .then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    fertig();
+    offen.forEach(function(d){ d.g=1; });
+    speichern(); render(); gistStandZeigen();
+    toast(offen.length===1?'Arztbrief im Briefkasten':offen.length+' Arztbriefe im Briefkasten');
+    return true;
+  })
+  .catch(function(err){
+    fertig(); render(); gistStandZeigen(gistFehler(err));
+    toast(gistFehler(err)+' – lokal gesichert');
+    return false;
+  });
 }
 
 /* ---- Export-Formate ---- */
@@ -434,6 +540,7 @@ function antwortEntwerfen(){
     $('text').value=''; $('kuerzel').value='';
     ANHANG=null; $('anhangDatei').value=''; anhangAnzeigen();
     speichern(); render(); toast('Antwortentwurf erstellt – bitte prüfen');
+    if(d.c==='arzt') pushArzt();
   }).catch(function(err){ toast(kiFehler(err,schluessel())); })
   .then(function(){ b.disabled=false; b.textContent='Antwort auf das Schreiben entwerfen'; });
 }
@@ -897,6 +1004,7 @@ function render(){
     var akt='<div class="aktionen">';
     if(!d.alt) akt+='<button type="button" class="leise klein" data-ki="'+i+'" style="background:#FBEAE1;color:var(--akzent)"'+(d._busy?' disabled':'')+'>'+(d._busy?'Überarbeite …':'Mit KI überarbeiten')+'</button>';
     else akt+='<button type="button" class="leise klein" data-swap="'+i+'">'+(d.aktivKi?'Original zeigen':'KI-Fassung zeigen')+'</button>';
+    if(d.c==='arzt'&&gistBereit()&&!d.g) akt+='<button type="button" class="leise klein" data-push="'+i+'" style="background:#E7F3EC;color:#2E7D4F"'+(d._push?' disabled':'')+'>In den Briefkasten</button>';
     if(d.c==='wa')   akt+='<button type="button" class="leise klein" data-wa="'+i+'" style="background:#E7F3EC;color:#2E7D4F">WhatsApp / Teilen</button>';
     if(d.c==='brief') akt+='<button type="button" class="leise klein" data-word="'+i+'" style="background:#F1EAE2;color:#7A5C3E">Als Word-Datei</button>';
     if(d.c==='mail') akt+='<button type="button" class="leise klein" data-mail="'+i+'" style="background:#EAF1F8;color:#3A6EA5">Text für Gmail kopieren</button>';
@@ -904,6 +1012,10 @@ function render(){
         +'<button type="button" class="leise klein rot" data-del="'+i+'">Löschen</button></div>';
     var kiBadge=d.alt?('<span class="badge" style="background:'+(d.aktivKi?'#211F1C':'#8A857D')+'">'+(d.aktivKi?'KI-Fassung':'Original')+'</span>'):'';
     if(d.quelle) kiBadge+='<span class="badge" style="background:#6F6A63">Entwurf zum Schreiben</span>';
+    if(d.c==='arzt'&&gistBereit()){
+      var gt=d._push?'wird übertragen …':(d.g?'im Briefkasten':'noch nicht übertragen');
+      kiBadge+='<span class="badge" style="background:'+(d.g?'#2E7D4F':'#B08A2E')+'">'+gt+'</span>';
+    }
     el.innerHTML='<div class="meta"><span class="badge" style="background:'+KAT[d.c].f+'">'+KAT[d.c].n+'</span>'+kiBadge
       +'<span>'+esc(d.t)+'</span>'+(d.k?'<span class="kuerzel">'+esc(d.k)+'</span>':'')+'</div>'
       +'<div class="text" id="tx'+i+'">'+esc(d.x)+'</div>'
@@ -938,8 +1050,39 @@ $('apiLoeschen').addEventListener('click',function(){
 });
 $('anhangDatei').addEventListener('change',anhangWahl);
 $('antwortKi').addEventListener('click',antwortEntwerfen);
-$('sichern').addEventListener('click',sichern);
-$('sichernKi').addEventListener('click',function(){var d=sichern(); if(d) ueberarbeiten(d);});
+$('gistAuf').addEventListener('click',function(){
+  var f=$('gistFeld'); f.style.display=(f.style.display==='none'?'':'none');
+  if(f.style.display===''){ $('gistToken').value=gToken(); $('gistIdFeld').value=gistId(); gistStandZeigen(); }
+});
+$('gistTokenSichern').addEventListener('click',function(){
+  var v=$('gistToken').value.trim();
+  try{ if(v) localStorage.setItem('gisttoken',v); else localStorage.removeItem('gisttoken'); }
+  catch(e){ toast('Auf diesem Weg nicht speicherbar'); }
+  toast(v?'Token gespeichert':'Token entfernt'); gistStandZeigen(); render();
+});
+$('gistTokenLoeschen').addEventListener('click',function(){
+  try{ localStorage.removeItem('gisttoken'); }catch(e){}
+  $('gistToken').value=''; gistStandZeigen(); render(); toast('Token entfernt');
+});
+$('gistAnlegen').addEventListener('click',briefkastenAnlegen);
+$('gistIdSichern').addEventListener('click',function(){
+  var v=$('gistIdFeld').value.trim();
+  try{ if(v) localStorage.setItem('gistid',v); else localStorage.removeItem('gistid'); }catch(e){}
+  toast(v?'Nummer gespeichert':'Nummer entfernt'); gistStandZeigen(); render();
+});
+$('gistIdKopie').addEventListener('click',function(){
+  var v=$('gistIdFeld').value.trim();
+  if(!v){ toast('Keine Nummer vorhanden'); return; }
+  kopieren(v,function(ok){ if(ok) toast('Nummer kopiert'); else overlayZeigen('Nummer zum Kopieren markieren',v); });
+});
+$('sichern').addEventListener('click',function(){
+  var d=sichern(); if(d&&d.c==='arzt') pushArzt();
+});
+$('sichernKi').addEventListener('click',function(){
+  var d=sichern(); if(!d) return;
+  /* erst überarbeiten, dann übertragen - sonst landet die Rohfassung im Briefkasten */
+  ueberarbeiten(d).then(function(){ if(d.c==='arzt') pushArzt(); });
+});
 $('exportDatei').addEventListener('click',exportDatei);
 $('allesKopieren').addEventListener('click',allesKopieren);
 $('alleLoeschen').addEventListener('click',function(){
@@ -975,6 +1118,7 @@ $('stapel').addEventListener('click',function(ev){
   } else if(b.dataset.swap!==undefined){ wechseln(D[+b.dataset.swap]);
   } else if(b.dataset.wa!==undefined){ teilenWa(D[+b.dataset.wa]);
   } else if(b.dataset.word!==undefined){ briefDialog(+b.dataset.word);
+  } else if(b.dataset.push!==undefined){ pushArzt(true);
   } else if(b.dataset.mail!==undefined){ oeffneMail(D[+b.dataset.mail]);
   } else if(b.dataset.del!==undefined){
     var j=+b.dataset.del;
